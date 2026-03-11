@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Physics Tic-Tac-Toe - Hand Tracking</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #gameCanvas {
+            display: block;
+            cursor: grab;
+        }
+
+        #gameCanvas:active {
+            cursor: grabbing;
+        }
+
+        /* UI Overlay */
+        #uiOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        .ui-element {
+            pointer-events: auto;
+        }
+
+        #turnDisplay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            border: 2px solid #4CAF50;
+            backdrop-filter: blur(5px);
+        }
+
+        #powerGaugeContainer {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 200px;
+            height: 25px;
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 12px;
+            border: 2px solid #2196F3;
+            overflow: hidden;
+            backdrop-filter: blur(5px);
+        }
+
+        #powerGauge {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #4CAF50, #FFC107, #FF5722);
+            transition: width 0.1s ease;
+            border-radius: 10px;
+        }
+
+        #controlButtons {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+        }
+
+        .control-btn {
+            padding: 12px 24px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            border: 2px solid #2196F3;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+        }
+
+        .control-btn:hover {
+            background: rgba(33, 150, 243, 0.3);
+            transform: translateY(-2px);
+        }
+
+        #gameStatus {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 30px 50px;
+            border-radius: 15px;
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center;
+            border: 3px solid #4CAF50;
+            display: none;
+            backdrop-filter: blur(10px);
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            max-width: 200px;
+            opacity: 0.8;
+        }
+
+        /* Camera Preview */
+        #webcamVideo {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 160px;
+            height: 120px;
+            border-radius: 8px;
+            border: 2px solid #2196F3;
+            transform: scaleX(-1);
+            /* Mirror effect */
+            opacity: 0.8;
+            z-index: 90;
+            object-fit: cover;
+        }
+
+        /* Virtual Hand Cursor */
+        #handCursor {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: rgba(255, 0, 0, 0.7);
+            border: 2px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 200;
+            transform: translate(-50%, -50%);
+            display: none;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.8);
+        }
+
+        #loadingMsg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            z-index: 1000;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="loadingMsg">Loading AI Models...</div>
+    <canvas id="gameCanvas"></canvas>
+    <video id="webcamVideo" autoplay playsinline muted></video>
+    <div id="handCursor"></div>
+
+    <div id="uiOverlay">
+        <div id="turnDisplay" class="ui-element">Player X's Turn</div>
+        <div id="powerGaugeContainer" class="ui-element">
+            <div id="powerGauge"></div>
+        </div>
+        <div id="controlButtons">
+            <button id="restartBtn" class="control-btn ui-element">Restart Game</button>
+            <button id="rescueBtn" class="control-btn ui-element">Rescue Piece</button>
+        </div>
+        <div id="gameStatus" class="ui-element"></div>
+        <div id="instructions">
+            <strong>How to Play:</strong><br>
+            [Mouse] Drag and release.<br>
+            [Hand] Use Index Finger to hover over piece, then FLICK forward to throw.
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+        import * as CANNON from 'https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js';
+        import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js';
+
+        // ----------------------------------------------------------------
+        // Class: HandInputManager
+        // Responsibility: Webcam handling, MediaPipe inference, Coordinate smoothing
+        // ----------------------------------------------------------------
+        class HandInputManager {
+            constructor(videoElement, cursorElement) {
+                this.video = videoElement;
+                this.cursor = cursorElement;
+                this.handLandmarker = null;
+                this.lastVideoTime = -1;
+                this.isEnabled = false;
+
+                // Smoothing and Physics
+                this.cursorPos = new THREE.Vector2(0, 0); // Normalized -1 to 1
+                this.targetPos = new THREE.Vector2(0, 0);
+                this.velocity = new THREE.Vector2(0, 0);
+                this.history = [];
+                this.HISTORY_LENGTH = 5;
+                this.LERP_FACTOR = 0.2; // Smoothing factor
+            }
+
+            async initialize() {
+                try {
+                    const vision = await FilesetResolver.forVisionTasks(
+                        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                    );
+                    this.handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                        baseOptions: {
+                            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                            delegate: "GPU"
+                        },
+                        runningMode: "VIDEO",
+                        numHands: 1
+                    });
+
+                    // Setup Camera
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                    this.video.srcObject = stream;
+                    await new Promise((resolve) => {
+                        this.video.onloadedmetadata = () => { resolve(this.video.play()); };
+                    });
+
+                    this.isEnabled = true;
+                    console.log("Hand Tracking Initialized");
+                } catch (error) {
+                    console.error("Hand Tracking Init Failed:", error);
+                    alert("Camera access denied or WebGPU not supported.");
+                }
+            }
+
+            update() {
+                if (!this.isEnabled || !this.handLandmarker) return null;
+
+                if (this.video.currentTime !== this.lastVideoTime) {
+                    this.lastVideoTime = this.video.currentTime;
+                    const results = this.handLandmarker.detectForVideo(this.video, performance.now());
+
+                    if (results.landmarks && results.landmarks.length > 0) {
+                        // Get Index Finger Tip (Index 8)
+                        const landmarks = results.landmarks[0];
+                        const indexTip = landmarks[8];
+
+                        // Convert to Normalized Device Coordinates (-1 to 1)
+                        // Note: MediaPipe X is 0-1 (left-right), Y is 0-1 (top-bottom)
+                        // We mirror X because the video is mirrored via CSS
+                        const ndcX = (1 - indexTip.x) * 2 - 1;
+                        const ndcY = -(indexTip.y * 2 - 1); // Invert Y for Three.js
+
+                        this.targetPos.set(ndcX, ndcY);
+                        this.cursor.style.display = 'block';
+                    } else {
+                        this.cursor.style.display = 'none';
+                        return null;
+                    }
+                }
+
+                // Smooth Movement
+                const prevPos = this.cursorPos.clone();
+                this.cursorPos.lerp(this.targetPos, this.LERP_FACTOR);
+
+                // Calculate Velocity (screen units per frame)
+                this.velocity.subVectors(this.cursorPos, prevPos);
+
+                // Update DOM Cursor
+                this.updateCursorVisual();
+
+                return {
+                    position: this.cursorPos,
+                    velocity: this.velocity
+                };
+            }
+
+            updateCursorVisual() {
+                // Convert NDC to pixel coordinates for CSS
+                const x = (this.cursorPos.x + 1) / 2 * window.innerWidth;
+                const y = -(this.cursorPos.y - 1) / 2 * window.innerHeight;
+                this.cursor.style.left = `${x}px`;
+                this.cursor.style.top = `${y}px`;
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Class: PhysicsTicTacToe (Main Game)
+        // ----------------------------------------------------------------
+        class PhysicsTicTacToe {
+            constructor() {
+                this.BOARD_SIZE = 3;
+                this.CELL_SIZE = 2.0;
+                this.BOARD_THICKNESS = 0.3;
+                this.PIECE_RADIUS = 0.6;
+                this.PIECE_HEIGHT = 0.3;
+                this.GRAVITY = -9.82;
+                this.SETTLE_VELOCITY_THRESHOLD = 0.8;
+                this.SETTLE_ANGULAR_THRESHOLD = 1.0;
+                this.SETTLE_FRAMES_REQUIRED = 10;
+
+                // Interaction Thresholds
+                this.FLICK_VELOCITY_THRESHOLD = 0.08; // Normalized distance per frame
+
+                this.CAMERA_BASE_POSITION = new THREE.Vector3(0, 10, 12);
+                this.CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
+                this.PIECE_START_POSITION = new THREE.Vector3(0, 2, 6);
+
+                this.clock = new THREE.Clock();
+
+                this.initializeGameState();
+                this.initializeScene();
+                this.initializePhysics();
+                this.createGameBoard();
+                this.setupEventListeners();
+                this.setupUI();
+
+                // Hand Tracking Integration
+                this.handManager = new HandInputManager(
+                    document.getElementById('webcamVideo'),
+                    document.getElementById('handCursor')
+                );
+                this.handManager.initialize().then(() => {
+                    document.getElementById('loadingMsg').style.display = 'none';
+                });
+
+                this.spawnNextPiece();
+                this.animate();
+            }
+
+            initializeGameState() {
+                this.gameState = Array(this.BOARD_SIZE).fill(null).map(() => Array(this.BOARD_SIZE).fill(null));
+                this.currentPlayer = 'X';
+                this.gameOver = false;
+
+                // Mouse Drag State
+                this.isDragging = false;
+                this.mouse = new THREE.Vector2();
+                this.dragStartPoint = new THREE.Vector2();
+                this.dragCurrentPoint = new THREE.Vector2();
+
+                // Hand State
+                this.isHandHovering = false;
+                this.handHoverStartTime = 0;
+
+                this.activePiece = null;
+                this.settlingPieces = [];
+                this.gamePieces = [];
+                this.cameraShake = { intensity: 0, duration: 0, basePosition: new THREE.Vector3() };
+            }
+
+            initializeScene() {
+                this.canvas = document.getElementById('gameCanvas');
+                if (!this.canvas) throw new Error("Canvas not found");
+
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x1a1a2e);
+
+                this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.copy(this.CAMERA_BASE_POSITION);
+                this.camera.lookAt(this.CAMERA_TARGET);
+                this.cameraShake.basePosition.copy(this.camera.position);
+
+                this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+                this.setupLighting();
+                this.raycaster = new THREE.Raycaster();
+            }
+
+            setupLighting() {
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+                this.scene.add(ambientLight);
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+                directionalLight.position.set(8, 12, 6);
+                directionalLight.castShadow = true;
+                directionalLight.shadow.mapSize.width = 2048;
+                directionalLight.shadow.mapSize.height = 2048;
+                this.scene.add(directionalLight);
+                const fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
+                fillLight.position.set(-5, 8, -3);
+                this.scene.add(fillLight);
+            }
+
+            initializePhysics() {
+                this.world = new CANNON.World();
+                this.world.gravity.set(0, this.GRAVITY, 0);
+                this.world.broadphase = new CANNON.SAPBroadphase(this.world);
+                this.world.solver.iterations = 10;
+                this.boardMaterial = new CANNON.Material('board');
+                this.pieceMaterial = new CANNON.Material('piece');
+                const contact = new CANNON.ContactMaterial(this.boardMaterial, this.pieceMaterial, { friction: 0.7, restitution: 0.2 });
+                this.world.addContactMaterial(contact);
+            }
+
+            createGameBoard() {
+                const boardSize = this.BOARD_SIZE * this.CELL_SIZE;
+                const geo = new THREE.BoxGeometry(boardSize, this.BOARD_THICKNESS, boardSize);
+                const mat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8 });
+                this.boardMesh = new THREE.Mesh(geo, mat);
+                this.boardMesh.position.set(0, -this.BOARD_THICKNESS / 2, 0);
+                this.boardMesh.receiveShadow = true;
+                this.scene.add(this.boardMesh);
+
+                const shape = new CANNON.Box(new CANNON.Vec3(boardSize / 2, this.BOARD_THICKNESS / 2, boardSize / 2));
+                const body = new CANNON.Body({ mass: 0, shape: shape, material: this.boardMaterial });
+                body.position.copy(this.boardMesh.position);
+                this.world.addBody(body);
+
+                this.createGridLines(boardSize);
+
+                const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: this.boardMaterial });
+                groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+                groundBody.position.set(0, -5, 0);
+                this.world.addBody(groundBody);
+            }
+
+            createGridLines(boardSize) {
+                const mat = new THREE.MeshStandardMaterial({ color: 0x654321, roughness: 0.9 });
+                const w = 0.05, h = 0.01;
+                for (let i = 1; i < this.BOARD_SIZE; i++) {
+                    const pos = (i - this.BOARD_SIZE / 2) * this.CELL_SIZE;
+                    const vMesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, boardSize), mat);
+                    vMesh.position.set(pos, this.BOARD_THICKNESS / 2, 0);
+                    this.scene.add(vMesh);
+                    const hMesh = new THREE.Mesh(new THREE.BoxGeometry(boardSize, h, w), mat);
+                    hMesh.position.set(0, this.BOARD_THICKNESS / 2, pos);
+                    this.scene.add(hMesh);
+                }
+            }
+
+            setupEventListeners() {
+                this.canvas.addEventListener('mousedown', this.onPointerDown.bind(this));
+                this.canvas.addEventListener('mousemove', this.onPointerMove.bind(this));
+                this.canvas.addEventListener('mouseup', this.onPointerUp.bind(this));
+                this.canvas.addEventListener('mouseleave', this.onPointerUp.bind(this));
+                window.addEventListener('resize', this.onWindowResize.bind(this));
+            }
+
+            setupUI() {
+                this.turnDisplay = document.getElementById('turnDisplay');
+                this.powerGauge = document.getElementById('powerGauge');
+                this.gameStatus = document.getElementById('gameStatus');
+                document.getElementById('restartBtn').addEventListener('click', this.restartGame.bind(this));
+                document.getElementById('rescueBtn').addEventListener('click', this.rescuePiece.bind(this));
+                this.updateTurnDisplay();
+            }
+
+            // --- Mouse Interaction ---
+            onPointerDown(event) {
+                if (this.gameOver || !this.activePiece || this.isDragging) return;
+                this.updateMousePosition(event);
+                if (this.checkIntersection(this.mouse)) {
+                    this.isDragging = true;
+                    this.dragStartPoint.copy(this.mouse);
+                    this.dragCurrentPoint.copy(this.mouse);
+                    this.createTrajectoryLine();
+                }
+            }
+
+            onPointerMove(event) {
+                if (!this.isDragging) return;
+                this.updateMousePosition(event);
+                this.dragCurrentPoint.copy(this.mouse);
+                this.updateDragVisuals();
+            }
+
+            onPointerUp() {
+                if (!this.isDragging || !this.activePiece) return;
+                this.isDragging = false;
+                this.hideTrajectoryLine();
+                this.powerGauge.style.width = '0%';
+
+                const velocity = this._calculateThrowVelocity(this.dragStartPoint, this.dragCurrentPoint);
+                this.throwPiece(velocity);
+            }
+
+            // --- Hand Interaction Logic ---
+            processHandInput() {
+                const handData = this.handManager.update();
+                if (!handData || this.gameOver || !this.activePiece || this.isDragging) {
+                    // Reset hand hover state if hand is lost
+                    if (this.isHandHovering && this.activePiece) {
+                        this.activePiece.mesh.material.emissive.setHex(0x000000);
+                        this.isHandHovering = false;
+                    }
+                    return;
+                }
+
+                const { position, velocity } = handData;
+
+                // 1. Raycast to check if hand is over the piece
+                const isOverPiece = this.checkIntersection(position);
+
+                if (isOverPiece) {
+                    if (!this.isHandHovering) {
+                        this.isHandHovering = true;
+                        this.activePiece.mesh.material.emissive.setHex(0x555555); // Highlight
+                    }
+                } else {
+                    if (this.isHandHovering && velocity.length() < this.FLICK_VELOCITY_THRESHOLD) {
+                        this.isHandHovering = false;
+                        this.activePiece.mesh.material.emissive.setHex(0x000000);
+                    }
+                }
+
+                // 2. Flick Detection
+                // Condition: Previously hovering AND High Velocity AND Moving Forward (up in screen space)
+                if (this.isHandHovering && velocity.length() > this.FLICK_VELOCITY_THRESHOLD && velocity.y > 0) {
+                    this.performHandFlick(velocity);
+                }
+            }
+
+            performHandFlick(velocityVec) {
+                this.isHandHovering = false;
+                this.activePiece.mesh.material.emissive.setHex(0x000000);
+
+                // Calculate throw vector based on flick velocity
+                const speedMultiplier = 400;
+                const upForce = 15;
+
+                const throwVelocity = new CANNON.Vec3(
+                    velocityVec.x * speedMultiplier,
+                    Math.abs(velocityVec.y * speedMultiplier * 0.5) + upForce, // Ensure upward arc
+                    -(velocityVec.y * speedMultiplier) // Screen Y up is World Z negative (forward)
+                );
+
+                this.showMessage("Flick Detected!", 1000);
+                this.throwPiece(throwVelocity);
+            }
+
+            checkIntersection(screenPos) {
+                this.raycaster.setFromCamera(screenPos, this.camera);
+                const intersects = this.raycaster.intersectObject(this.activePiece.mesh);
+                return intersects.length > 0;
+            }
+
+            updateDragVisuals() {
+                const dragDistance = this.dragStartPoint.distanceTo(this.dragCurrentPoint);
+                const power = Math.min(dragDistance * 100, 100);
+                this.powerGauge.style.width = power + '%';
+                this.updateTrajectoryPreview();
+            }
+
+            _calculateThrowVelocity(start, end) {
+                const dragVector = new THREE.Vector2().subVectors(end, start);
+                dragVector.y *= -1;
+                const dragMagnitude = dragVector.length();
+                if (dragMagnitude < 0.01) return new CANNON.Vec3(0, 0, 0);
+
+                const horizontalPower = 40;
+                const maxThrowSpeed = 35;
+                const throwSpeed = Math.min(dragMagnitude * horizontalPower, maxThrowSpeed);
+                const direction = new THREE.Vector3(dragVector.x, 0, dragVector.y).normalize();
+                return new CANNON.Vec3(direction.x * throwSpeed, Math.min(dragMagnitude * 25, 20), direction.z * throwSpeed);
+            }
+
+            throwPiece(velocity) {
+                if (velocity.lengthSquared() > 0.1) {
+                    this.activePiece.body.type = CANNON.Body.DYNAMIC;
+                    this.activePiece.body.applyImpulse(velocity, new CANNON.Vec3(0, 0, 0));
+                    this.activePiece.body.angularVelocity.set((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5);
+                    this.activePiece.body.addEventListener('collide', this.onPieceCollision.bind(this));
+
+                    this.settlingPieces.push(this.activePiece);
+                    this.activePiece = null;
+                }
+            }
+
+            updateMousePosition(event) {
+                const rect = this.canvas.getBoundingClientRect();
+                this.mouse.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+            }
+
+            spawnNextPiece() {
+                if (this.gameOver) return;
+                const geo = new THREE.CylinderGeometry(this.PIECE_RADIUS, this.PIECE_RADIUS, this.PIECE_HEIGHT, 32);
+                const color = this.currentPlayer === 'X' ? 0xff4444 : 0x4444ff;
+                const mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.7 });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.castShadow = true; mesh.receiveShadow = true;
+                mesh.position.copy(this.PIECE_START_POSITION);
+
+                const shape = new CANNON.Cylinder(this.PIECE_RADIUS, this.PIECE_RADIUS, this.PIECE_HEIGHT, 16);
+                const body = new CANNON.Body({ mass: 1, shape: shape, material: this.pieceMaterial, type: CANNON.Body.STATIC });
+                body.position.copy(mesh.position);
+
+                this.activePiece = { mesh, body, player: this.currentPlayer, settleFrames: 0 };
+                this.scene.add(mesh);
+                this.world.addBody(body);
+                this.gamePieces.push(this.activePiece);
+            }
+
+            createTrajectoryLine() {
+                const mat = new THREE.LineBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0.7 });
+                this.trajectoryLine = new THREE.Line(new THREE.BufferGeometry(), mat);
+                this.scene.add(this.trajectoryLine);
+            }
+
+            updateTrajectoryPreview() {
+                if (!this.trajectoryLine || !this.activePiece) return;
+                const vel = this._calculateThrowVelocity(this.dragStartPoint, this.dragCurrentPoint);
+                const start = this.activePiece.mesh.position.clone();
+                const points = [];
+                for (let t = 0; t <= 2.0; t += 0.05) {
+                    const p = new THREE.Vector3(
+                        start.x + vel.x * t,
+                        start.y + vel.y * t + 0.5 * this.GRAVITY * t * t,
+                        start.z + vel.z * t
+                    );
+                    points.push(p);
+                    if (p.y < 0) break;
+                }
+                this.trajectoryLine.geometry.setFromPoints(points);
+            }
+
+            hideTrajectoryLine() {
+                if (this.trajectoryLine) {
+                    this.scene.remove(this.trajectoryLine);
+                    this.trajectoryLine.geometry.dispose();
+                    this.trajectoryLine = null;
+                }
+            }
+
+            onPieceCollision(event) {
+                const impact = Math.abs(event.contact.getImpactVelocityAlongNormal());
+                if (impact > 2) this.triggerCameraShake(impact * 0.05, 200);
+            }
+
+            triggerCameraShake(intensity, duration) {
+                this.cameraShake.intensity = Math.max(this.cameraShake.intensity, intensity);
+                this.cameraShake.duration = Math.max(this.cameraShake.duration, duration);
+            }
+
+            updateSettlingPieces() {
+                for (let i = this.settlingPieces.length - 1; i >= 0; i--) {
+                    const p = this.settlingPieces[i];
+                    const vel = p.body.velocity.length();
+                    const ang = p.body.angularVelocity.length();
+                    const onBoard = p.body.position.y > -2 && Math.abs(p.body.position.x) < 5 && Math.abs(p.body.position.z) < 5;
+
+                    if (vel < this.SETTLE_VELOCITY_THRESHOLD && ang < this.SETTLE_ANGULAR_THRESHOLD && onBoard) {
+                        p.settleFrames++;
+                        if (p.settleFrames >= this.SETTLE_FRAMES_REQUIRED) {
+                            this.snapToGrid(p);
+                            this.settlingPieces.splice(i, 1);
+                        }
+                    } else if (p.body.position.y < -3) {
+                        this.handleOffBoardPiece(p);
+                        this.settlingPieces.splice(i, 1);
+                    } else {
+                        p.settleFrames = 0;
+                    }
+                }
+            }
+
+            snapToGrid(piece) {
+                const gx = Math.round((piece.body.position.x / this.CELL_SIZE) + (this.BOARD_SIZE - 1) / 2);
+                const gz = Math.round((piece.body.position.z / this.CELL_SIZE) + (this.BOARD_SIZE - 1) / 2);
+
+                if (gx < 0 || gx >= this.BOARD_SIZE || gz < 0 || gz >= this.BOARD_SIZE) {
+                    this.handleOffBoardPiece(piece);
+                    return;
+                }
+                if (this.gameState[gz][gx] !== null) {
+                    this.handleOccupiedCell(piece);
+                    return;
+                }
+
+                const tx = (gx - (this.BOARD_SIZE - 1) / 2) * this.CELL_SIZE;
+                const tz = (gz - (this.BOARD_SIZE - 1) / 2) * this.CELL_SIZE;
+
+                this.animatePieceSnap(piece.mesh, piece.body, new THREE.Vector3(tx, this.PIECE_HEIGHT / 2 + 0.01, tz), () => {
+                    this.gameState[gz][gx] = piece.player;
+                    this.checkGameEnd();
+                });
+            }
+
+            animatePieceSnap(mesh, body, target, onComplete) {
+                body.type = CANNON.Body.STATIC;
+                body.position.copy(target);
+                const startPos = mesh.position.clone();
+                const startQuat = mesh.quaternion.clone();
+                const targetQuat = new THREE.Quaternion(); // Identity (upright)
+                let time = 0;
+
+                const step = () => {
+                    time += this.clock.getDelta() * 1000;
+                    const prog = Math.min(time / 200, 1); // Faster snap
+                    const eased = 1 - Math.pow(1 - prog, 3);
+                    mesh.position.lerpVectors(startPos, target, eased);
+                    mesh.quaternion.slerpQuaternions(startQuat, targetQuat, eased);
+                    if (prog < 1) requestAnimationFrame(step);
+                    else onComplete();
+                };
+                step();
+            }
+
+            handleOffBoardPiece(piece) {
+                this.showMessage("Off board! Next turn.", 2000);
+                this.removePiece(piece);
+                this.nextTurn();
+            }
+
+            handleOccupiedCell(piece) {
+                this.showMessage("Occupied! Next turn.", 2000);
+                this.removePiece(piece);
+                this.nextTurn();
+            }
+
+            removePiece(piece) {
+                if (!piece) return;
+                this.scene.remove(piece.mesh);
+                this.world.removeBody(piece.body);
+                piece.mesh.geometry.dispose();
+                piece.mesh.material.dispose();
+                const idx = this.gamePieces.indexOf(piece);
+                if (idx > -1) this.gamePieces.splice(idx, 1);
+            }
+
+            checkGameEnd() {
+                const winner = this.checkWinner();
+                if (winner) {
+                    this.gameOver = true;
+                    this.showGameStatus(`Player ${winner} Wins!`);
+                } else if (this.checkDraw()) {
+                    this.gameOver = true;
+                    this.showGameStatus("Draw!");
+                } else {
+                    this.nextTurn();
+                }
+            }
+
+            checkWinner() {
+                const lines = [
+                    [[0, 0], [0, 1], [0, 2]], [[1, 0], [1, 1], [1, 2]], [[2, 0], [2, 1], [2, 2]],
+                    [[0, 0], [1, 0], [2, 0]], [[0, 1], [1, 1], [2, 1]], [[0, 2], [1, 2], [2, 2]],
+                    [[0, 0], [1, 1], [2, 2]], [[0, 2], [1, 1], [2, 0]]
+                ];
+                for (const line of lines) {
+                    const [a, b, c] = line;
+                    const v = this.gameState[a[0]][a[1]];
+                    if (v && v === this.gameState[b[0]][b[1]] && v === this.gameState[c[0]][c[1]]) return v;
+                }
+                return null;
+            }
+
+            checkDraw() {
+                return this.gameState.every(row => row.every(cell => cell !== null));
+            }
+
+            nextTurn() {
+                if (this.gameOver) return;
+                this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
+                this.updateTurnDisplay();
+                this.spawnNextPiece();
+            }
+
+            updateTurnDisplay() {
+                this.turnDisplay.textContent = `Player ${this.currentPlayer}'s Turn`;
+                this.turnDisplay.style.borderColor = this.currentPlayer === 'X' ? '#ff4444' : '#4444ff';
+            }
+
+            showGameStatus(msg) {
+                this.gameStatus.textContent = msg;
+                this.gameStatus.style.display = 'block';
+            }
+
+            showMessage(msg, dur) {
+                const t = document.createElement('div');
+                t.textContent = msg;
+                Object.assign(t.style, {
+                    position: 'absolute', bottom: '100px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'rgba(0,0,0,0.8)', color: 'white', padding: '10px 20px',
+                    borderRadius: '8px', zIndex: '101'
+                });
+                document.getElementById('uiOverlay').appendChild(t);
+                setTimeout(() => t.remove(), dur);
+            }
+
+            updateCameraShake(dt) {
+                if (this.cameraShake.duration > 0) {
+                    const { intensity } = this.cameraShake;
+                    this.camera.position.x = this.cameraShake.basePosition.x + (Math.random() - 0.5) * intensity;
+                    this.camera.position.y = this.cameraShake.basePosition.y + (Math.random() - 0.5) * intensity * 0.5;
+                    this.cameraShake.duration -= dt * 1000;
+                    this.cameraShake.intensity *= 0.95;
+                    if (this.cameraShake.duration <= 0) {
+                        this.camera.position.copy(this.cameraShake.basePosition);
+                        this.cameraShake.intensity = 0;
+                    }
+                }
+            }
+
+            rescuePiece() {
+                if (this.activePiece) {
+                    this.removePiece(this.activePiece);
+                    this.activePiece = null;
+                    this.spawnNextPiece();
+                }
+                this.isDragging = false;
+                this.powerGauge.style.width = '0%';
+                this.hideTrajectoryLine();
+                this.showMessage("Rescued!", 1500);
+            }
+
+            restartGame() {
+                [...this.gamePieces].forEach(p => this.removePiece(p));
+                this.settlingPieces = [];
+                this.activePiece = null;
+                this.initializeGameState();
+                this.isDragging = false;
+                this.powerGauge.style.width = '0%';
+                this.gameStatus.style.display = 'none';
+                this.hideTrajectoryLine();
+                this.updateTurnDisplay();
+                this.camera.position.copy(this.CAMERA_BASE_POSITION);
+                this.cameraShake.basePosition.copy(this.camera.position);
+                this.camera.lookAt(this.CAMERA_TARGET);
+                this.spawnNextPiece();
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            animate() {
+                requestAnimationFrame(this.animate.bind(this));
+                const dt = this.clock.getDelta();
+
+                // Hand Input Processing
+                this.processHandInput();
+
+                this.world.step(1 / 60, dt, 3);
+                this.gamePieces.forEach(p => {
+                    if (p.body.type === CANNON.Body.DYNAMIC) {
+                        p.mesh.position.copy(p.body.position);
+                        p.mesh.quaternion.copy(p.body.quaternion);
+                    }
+                });
+                this.updateSettlingPieces();
+                this.updateCameraShake(dt);
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            new PhysicsTicTacToe();
+        });
+    </script>
+</body>
+
+</html>
