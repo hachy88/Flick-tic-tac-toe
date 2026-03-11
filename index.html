@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>3D Physics Tic-Tac-Toe - Royal Edition</title>
     <style>
         * {
@@ -17,11 +17,16 @@
             background: #000;
             overflow: hidden;
             user-select: none;
+            touch-action: none;
+            height: 100vh;
+            height: 100dvh;
         }
 
         #gameCanvas {
             display: block;
             cursor: grab;
+            width: 100%;
+            height: 100%;
         }
 
         #gameCanvas:active {
@@ -29,11 +34,8 @@
         }
 
         #uiOverlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+            position: fixed;
+            inset: 0;
             pointer-events: none;
             z-index: 100;
         }
@@ -137,6 +139,34 @@
             font-weight: bold;
             z-index: 1000;
         }
+
+        @media (max-width: 768px) {
+            #webcamVideo {
+                bottom: auto;
+                top: 70px;
+                width: 120px;
+                height: 90px;
+            }
+
+            #turnDisplay {
+                font-size: 14px;
+                padding: 10px 15px;
+            }
+
+            #controlButtons {
+                bottom: max(40px, calc(env(safe-area-inset-bottom, 0px) + 20px));
+                width: 90%;
+                justify-content: space-between;
+                gap: 10px;
+            }
+
+            .control-btn {
+                padding: 12px 0;
+                font-size: 14px;
+                flex: 1;
+                text-align: center;
+            }
+        }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -146,8 +176,7 @@
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
                 "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-                "mediapipe-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js",
-                "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.19.1/dist/lil-gui.esm.min.js"
+                "mediapipe-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js"
             }
         }
     </script>
@@ -173,7 +202,6 @@
         import * as THREE from 'three';
         import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
         import { FilesetResolver, HandLandmarker } from 'mediapipe-vision';
-        import GUI from 'lil-gui';
 
         // --- SoundManager ---
         class SoundManager {
@@ -187,7 +215,6 @@
                 this.initialized = true;
             }
 
-            // 基本発音メソッドからピッチスイープ機能を削除し、硬質なエンベロープに特化
             playTone(frequency, type, duration, vol) {
                 if (!this.initialized) return;
                 const osc = this.ctx.createOscillator();
@@ -202,43 +229,33 @@
                 osc.stop(this.ctx.currentTime + duration);
             }
 
-            // 生成・投擲音も硬質な世界観に合わせて最適化
             playSpawn() { this.playTone(800, 'triangle', 0.05, 0.1); }
             playFlick() { this.playTone(400, 'square', 0.03, 0.05); }
 
-            // 計算負荷を抑えつつFM合成と動的フィルタでリッチにした「ゴン」という重厚音
             playHit(intensity) {
                 if (!this.initialized) return;
                 const time = this.ctx.currentTime;
-                // 衝突エネルギーの正規化 (0.05 ~ 1.0)
                 const energy = Math.min(Math.max(0.05, intensity * 0.15), 1.0);
 
-                // 1. FM合成による「金属的な濁り(インハーモニシティ)」の付加
                 const bodyOsc = this.ctx.createOscillator();
-                const modOsc = this.ctx.createOscillator(); // FMモジュレータ
+                const modOsc = this.ctx.createOscillator();
                 const modGain = this.ctx.createGain();
                 const bodyGain = this.ctx.createGain();
 
-                // キャリア (質量の芯となる低音)
                 bodyOsc.type = 'sine';
                 const baseFreq = 100 + Math.random() * 20;
                 bodyOsc.frequency.setValueAtTime(baseFreq, time);
 
-                // モジュレータ (非整数倍音を生成)
                 modOsc.type = 'sine';
-                modOsc.frequency.setValueAtTime(baseFreq * 2.42, time); // 2.42倍の非整数比で金属感を定式化
-
-                // 変調の深さ：強くぶつかるほど変調指数が上がり、倍音（濁り）が増す
+                modOsc.frequency.setValueAtTime(baseFreq * 2.42, time);
                 modGain.gain.setValueAtTime(baseFreq * 1.5 * energy, time);
 
-                // FMルーティング: モジュレータ -> ゲイン -> キャリアの周波数パラメータ
                 modOsc.connect(modGain);
                 modGain.connect(bodyOsc.frequency);
 
                 bodyGain.gain.setValueAtTime(energy * 1.2, time);
                 bodyGain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
 
-                // 2. Transient Layer (アタックの物理的接触感)
                 const clickOsc = this.ctx.createOscillator();
                 const clickGain = this.ctx.createGain();
                 clickOsc.type = 'triangle';
@@ -246,28 +263,19 @@
                 clickGain.gain.setValueAtTime(energy * 0.8, time);
                 clickGain.gain.exponentialRampToValueAtTime(0.001, time + 0.03);
 
-                // 3. 動的ローパスフィルター (Spectral Evolution)
                 const filter = this.ctx.createBiquadFilter();
                 filter.type = 'lowpass';
-
-                // 衝突強度に応じて初期のカットオフ周波数を動的決定 (強い: 1500Hz, 弱い: 300Hz)
                 const cutoffStart = 300 + energy * 1200;
                 filter.frequency.setValueAtTime(cutoffStart, time);
-
-                // アタック直後、急速に100Hzへ減衰させ、音のテールを「ゴン」と丸く包み込む
                 filter.frequency.exponentialRampToValueAtTime(100, time + 0.08);
-                filter.Q.value = 0.5; // レゾナンスを抑え、自然なエネルギー散逸を表現
+                filter.Q.value = 0.5;
 
-                // ルーティングの統合
                 bodyOsc.connect(bodyGain);
                 clickOsc.connect(clickGain);
-
                 bodyGain.connect(filter);
                 clickGain.connect(filter);
-
                 filter.connect(this.ctx.destination);
 
-                // 発音スケジューリング
                 bodyOsc.start(time);
                 modOsc.start(time);
                 clickOsc.start(time);
@@ -276,7 +284,7 @@
                 modOsc.stop(time + 0.2);
                 clickOsc.stop(time + 0.05);
             }
-            // SoundManager クラス内に追加
+
             playWin() {
                 if (!this.initialized) return;
                 this.playTone(880, 'sine', 0.1, 0.1);
@@ -297,10 +305,7 @@
                     this.xPrev = x; this.dxPrev = 0; this.tPrev = t;
                     return x;
                 }
-
                 let dt = (t - this.tPrev) / 1000.0;
-
-                // 【最適化】ブラウザのタイマー精度低下に伴う dt=0 の発生と、それに伴う NaN 伝播を防止
                 if (dt <= 0.0) dt = 0.001;
 
                 this.tPrev = t;
@@ -310,7 +315,6 @@
                 const cutoff = this.minCutoff + this.beta * Math.abs(edx);
                 const ex = this.lowPassFilter(this.alpha(cutoff, dt), x, this.xPrev);
                 this.xPrev = ex;
-
                 return ex;
             }
 
@@ -339,8 +343,6 @@
                 this.config = { sensitivity: 1.5, minCutoff: 1.0, beta: 5.0 };
                 this.cursorPos = new THREE.Vector2(0, 0);
                 this.velocity = new THREE.Vector2(0, 0);
-
-                // 追加された状態変数
                 this.prevCursorPos = new THREE.Vector2(0, 0);
                 this.lastTimestamp = undefined;
             }
@@ -405,7 +407,7 @@
                         this.velocity.y = alpha * instVelY + (1 - alpha) * this.velocity.y;
 
                         this.cursor.style.display = 'block';
-                        this.updateCursorVisual(); // ここで呼び出される
+                        this.updateCursorVisual();
                         return { position: this.cursorPos, velocity: this.velocity };
 
                     } else {
@@ -419,7 +421,6 @@
                 return { position: this.cursorPos, velocity: this.velocity };
             }
 
-            // 欠落していた描画更新メソッド
             updateCursorVisual() {
                 const x = (this.cursorPos.x + 1) / 2 * window.innerWidth;
                 const y = -(this.cursorPos.y - 1) / 2 * window.innerHeight;
@@ -434,25 +435,22 @@
             canvas.width = 256; canvas.height = 256;
             const ctx = canvas.getContext('2d');
 
-            // Background
             ctx.fillStyle = '#' + baseColor.toString(16).padStart(6, '0');
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Outer Ring
             ctx.strokeStyle = '#' + ringColor.toString(16).padStart(6, '0');
             ctx.lineWidth = 15;
             ctx.beginPath();
             ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2 - ctx.lineWidth / 2 - 5, 0, Math.PI * 2);
             ctx.stroke();
 
-            // Text
             ctx.fillStyle = '#' + textColor.toString(16).padStart(6, '0');
-            ctx.font = '700 160px "Cinzel", serif'; // Use Cinzel, weight 700, fall back to serif
+            ctx.font = '700 160px "Cinzel", serif';
             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText(player, canvas.width / 2, canvas.height / 2 + 15); // Adjust Y for vertical alignment
+            ctx.fillText(player, canvas.width / 2, canvas.height / 2 + 15);
 
             const texture = new THREE.CanvasTexture(canvas);
-            texture.colorSpace = THREE.SRGBColorSpace; // Correct color space for maps
+            texture.colorSpace = THREE.SRGBColorSpace;
             return texture;
         }
 
@@ -462,40 +460,35 @@
                 this.BOARD_SIZE = 3; this.CELL_SIZE = 2.0; this.BOARD_THICKNESS = 0.3;
                 this.PIECE_RADIUS = 0.6; this.PIECE_HEIGHT = 0.3; this.GRAVITY = -9.82;
                 this.params = { handSensitivity: 2.0, throwStrength: 0.13, minCutoff: 0.5, beta: 0.2, flickThreshold: 1.5 };
-                this.CAMERA_BASE_POSITION = new THREE.Vector3(0, 7.5, 9);
                 this.clock = new THREE.Clock();
                 this.soundManager = new SoundManager();
                 document.addEventListener('click', () => this.soundManager.init(), { once: true });
-                // Piece Texture Cache
                 this.pieceTextures = { 'X': null, 'O': null };
+                this.CAMERA_DESKTOP_POS = new THREE.Vector3(0, 7.5, 9);
+                this.CAMERA_MOBILE_POS = new THREE.Vector3(0, 11, 14);
+                this.currentCameraBasePos = new THREE.Vector3();
+
+                // Object Pooling Resources
+                this.highlightMats = {
+                    'X': new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.3, side: THREE.DoubleSide }),
+                    'O': new THREE.MeshBasicMaterial({ color: 0x4444ff, transparent: true, opacity: 0.3, side: THREE.DoubleSide })
+                };
+                this.gridHighlights = Array(this.BOARD_SIZE).fill(null).map(() => Array(this.BOARD_SIZE).fill(null));
 
                 this.initializeGameState();
                 this.initializeScene();
                 this.initializePhysics();
                 this.createGameBoard();
+                this.initHighlightPool();
                 this.setupUI();
 
                 this.handManager = new HandInputManager(document.getElementById('webcamVideo'), document.getElementById('handCursor'));
-                this.setupGUI();
 
-                // Wait for model AND fonts to be ready
                 this.handManager.initialize().then(() => {
                     this.updateHandManagerParams();
                 });
 
                 this.animate();
-            }
-
-            setupGUI() {
-                const gui = new GUI({ title: "Control Panel" });
-                const folderInput = gui.addFolder('Hand Input');
-                folderInput.add(this.params, 'handSensitivity', 0.5, 5.0).onChange(() => this.updateHandManagerParams());
-                folderInput.add(this.params, 'minCutoff', 0.01, 5.0).onChange(() => this.updateHandManagerParams());
-                folderInput.add(this.params, 'beta', 0.0, 20.0).onChange(() => this.updateHandManagerParams());
-                const folderGame = gui.addFolder('Gameplay');
-                folderGame.add(this.params, 'throwStrength', 0.1, 3.0);
-                folderGame.add(this.params, 'flickThreshold', 0.01, 0.2);
-                gui.add({ reset: () => this.restartGame() }, 'reset').name('Restart Match');
             }
 
             updateHandManagerParams() {
@@ -506,9 +499,7 @@
                 this.gameState = Array(this.BOARD_SIZE).fill(null).map(() => Array(this.BOARD_SIZE).fill(null));
                 this.currentPlayer = 'X'; this.gameOver = false; this.isHandHovering = false;
                 this.activePiece = null; this.settlingPieces = []; this.gamePieces = [];
-                this.highlightElements = []; this.raycaster = new THREE.Raycaster();
-
-                // 演出用ステートの追加
+                this.raycaster = new THREE.Raycaster();
                 this.isWinningCameraOrbit = false;
                 this.cameraAngle = 0;
                 this.confettiParticles = [];
@@ -517,42 +508,35 @@
             initializeScene() {
                 this.canvas = document.getElementById('gameCanvas');
                 this.scene = new THREE.Scene();
-                // 1. 盤が見えにくい -> 背景色を少し明るく、ネイビーグレーに
                 this.scene.background = new THREE.Color(0x222233);
 
                 this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-                this.camera.position.copy(this.CAMERA_BASE_POSITION);
-                this.camera.lookAt(0, 0, 0);
-
                 this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setSize(window.innerWidth, window.innerHeight, false);
                 this.renderer.shadowMap.enabled = true;
                 this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
                 this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-                // 1. 盤が見えにくい -> 露出を少し上げる
                 this.renderer.toneMappingExposure = 1.3;
 
                 const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
                 pmremGenerator.compileEquirectangularShader();
                 this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 
-                // 1. 盤が見えにくい -> 環境光を強く
                 const ambient = new THREE.AmbientLight(0xffffff, 0.4);
                 this.scene.add(ambient);
 
-                // 1. 盤が見えにくい -> ディレクショナルライトを調整
-                const dirLight = new THREE.DirectionalLight(0xffffff, 2.0); // 強度アップ
-                dirLight.position.set(10, 15, 7); // より高く、全体を照らす
+                const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+                dirLight.position.set(10, 15, 7);
                 dirLight.castShadow = true;
                 dirLight.shadow.mapSize.set(2048, 2048);
                 dirLight.shadow.bias = -0.0001;
                 this.scene.add(dirLight);
 
-                // 1. 盤が見えにくい -> ポイントライトを白色にして手前を照らす
-                const pointLight = new THREE.PointLight(0xffffff, 30, 20); // 白色、強度調整
-                pointLight.position.set(-3, 4, 3); // 位置調整
+                const pointLight = new THREE.PointLight(0xffffff, 30, 20);
+                pointLight.position.set(-3, 4, 3);
                 this.scene.add(pointLight);
+                this.updateCameraState();
             }
 
             initializePhysics() {
@@ -567,15 +551,9 @@
 
             createGameBoard() {
                 const size = this.BOARD_SIZE * this.CELL_SIZE;
-
-                // 1. 盤が見えにくい -> 白大理石風の盤面に変更
                 const geo = new THREE.BoxGeometry(size, this.BOARD_THICKNESS, size);
                 const mat = new THREE.MeshPhysicalMaterial({
-                    color: 0xffffff, // 白
-                    metalness: 0.0, // 非金属
-                    roughness: 0.3, // 少しマット
-                    clearcoat: 1.0,
-                    clearcoatRoughness: 0.05
+                    color: 0xffffff, metalness: 0.0, roughness: 0.3, clearcoat: 1.0, clearcoatRoughness: 0.05
                 });
                 this.boardMesh = new THREE.Mesh(geo, mat);
                 this.boardMesh.position.y = -this.BOARD_THICKNESS / 2;
@@ -600,7 +578,6 @@
             }
 
             createGridLines(size) {
-                // Gold Inlay (そのまま、白大理石に映える)
                 const mat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.2, envMapIntensity: 1.5 });
                 for (let i = 1; i < this.BOARD_SIZE; i++) {
                     const p = (i - this.BOARD_SIZE / 2) * this.CELL_SIZE;
@@ -612,39 +589,89 @@
                 }
             }
 
+            initHighlightPool() {
+                const geo = new THREE.PlaneGeometry(this.CELL_SIZE * 0.9, this.CELL_SIZE * 0.9);
+                for (let gz = 0; gz < this.BOARD_SIZE; gz++) {
+                    for (let gx = 0; gx < this.BOARD_SIZE; gx++) {
+                        // ダミーマテリアルで初期化、状態に応じて差し替える
+                        const mesh = new THREE.Mesh(geo, this.highlightMats['X']);
+                        mesh.rotation.x = -Math.PI / 2;
+                        mesh.position.set((gx - 1) * this.CELL_SIZE, 0.02, (gz - 1) * this.CELL_SIZE);
+                        mesh.visible = false;
+                        this.scene.add(mesh);
+                        this.gridHighlights[gz][gx] = mesh;
+                    }
+                }
+            }
+
             setupUI() {
                 this.turnDisplay = document.getElementById('turnDisplay');
                 this.gameStatus = document.getElementById('gameStatus');
                 document.getElementById('restartBtn').addEventListener('click', () => this.restartGame());
                 document.getElementById('rescueBtn').addEventListener('click', () => this.rescuePiece());
-                window.addEventListener('resize', () => {
-                    this.camera.aspect = window.innerWidth / window.innerHeight;
-                    this.camera.updateProjectionMatrix();
-                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+
+                this.resizeObserver = new ResizeObserver(entries => {
+                    for (const entry of entries) {
+                        const { width, height } = entry.contentRect;
+                        if (width === 0 || height === 0) continue;
+                        this.updateCameraState(width, height);
+                    }
                 });
+                this.resizeObserver.observe(document.body);
+            }
+
+            updateCameraState(width = window.innerWidth, height = window.innerHeight) {
+                const isMobile = width <= 768;
+                const targetPos = isMobile ? this.CAMERA_MOBILE_POS : this.CAMERA_DESKTOP_POS;
+                this.currentCameraBasePos.copy(targetPos);
+
+                if (!this.isWinningCameraOrbit) {
+                    this.camera.position.copy(this.currentCameraBasePos);
+                    this.camera.lookAt(0, 0, 0);
+                }
+
+                this.camera.aspect = width / height;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(width, height, false);
+
+                const uiControl = document.getElementById('controlButtons');
+                const uiVideo = document.getElementById('webcamVideo');
+                const uiTurn = document.getElementById('turnDisplay');
+
+                if (uiControl && uiVideo && uiTurn) {
+                    if (isMobile) {
+                        uiVideo.style.bottom = 'auto';
+                        uiControl.style.bottom = 'auto';
+                        const turnRect = uiTurn.getBoundingClientRect();
+                        uiVideo.style.top = `${turnRect.bottom + 10}px`;
+                        uiVideo.style.width = '120px';
+                        uiVideo.style.height = '90px';
+                        const btnHeight = uiControl.getBoundingClientRect().height || 42;
+                        uiControl.style.top = `${height - btnHeight - 50}px`;
+                    } else {
+                        uiVideo.style.top = '';
+                        uiVideo.style.bottom = '20px';
+                        uiVideo.style.width = '160px';
+                        uiVideo.style.height = '120px';
+                        uiControl.style.top = '';
+                        uiControl.style.bottom = '20px';
+                    }
+                }
             }
 
             spawnNextPiece() {
                 if (this.gameOver) return;
 
-                // 2. 駒も装飾して -> 動的テクスチャを作成
                 if (!this.pieceTextures[this.currentPlayer]) {
-                    const baseColor = this.currentPlayer === 'X' ? 0xcc2222 : 0x2244cc; // アノダイズド風の少し暗い赤/青
-                    const ringColor = this.currentPlayer === 'X' ? 0xd4af37 : 0xc0c0c0; // 金縁 / 銀縁
-                    const textColor = 0xffffff; // 白文字
+                    const baseColor = this.currentPlayer === 'X' ? 0xcc2222 : 0x2244cc;
+                    const ringColor = this.currentPlayer === 'X' ? 0xd4af37 : 0xc0c0c0;
+                    const textColor = 0xffffff;
                     this.pieceTextures[this.currentPlayer] = createPieceTexture(this.currentPlayer, baseColor, ringColor, textColor);
                 }
 
-                // Anodized Aluminum pieces with texture
                 const geo = new THREE.CylinderGeometry(this.PIECE_RADIUS, this.PIECE_RADIUS, this.PIECE_HEIGHT, 64);
-
-                // 2. 駒も装飾して -> マテリアルにテクスチャを適用
                 const mat = new THREE.MeshStandardMaterial({
-                    map: this.pieceTextures[this.currentPlayer], // テクスチャ適用
-                    color: 0xffffff, // テクスチャの色をそのまま出す
-                    metalness: 0.9, // 高金属光沢
-                    roughness: 0.2,
-                    envMapIntensity: 2.0
+                    map: this.pieceTextures[this.currentPlayer], color: 0xffffff, metalness: 0.9, roughness: 0.2, envMapIntensity: 2.0
                 });
 
                 const mesh = new THREE.Mesh(geo, mat);
@@ -667,7 +694,7 @@
                 this.activePiece = { mesh, body, player: this.currentPlayer, settleFrames: 0, lastVel: new THREE.Vector3() };
                 this.scene.add(mesh); this.world.addRigidBody(body);
                 this.gamePieces.push(this.activePiece);
-                this.soundManager.playSpawn(); // 生成音の追加
+                this.soundManager.playSpawn();
             }
 
             processHandInput() {
@@ -723,7 +750,7 @@
 
                 this.settlingPieces.push(this.activePiece);
                 this.activePiece = null;
-                this.soundManager.playFlick(); // 投擲音の追加
+                this.soundManager.playFlick();
             }
 
             updateSettlingPieces() {
@@ -735,14 +762,10 @@
                     p.body.getMotionState().getWorldTransform(this.tmpTransform);
                     const pos = this.tmpTransform.getOrigin();
 
-                    // 静止状態の判定
                     if (v < 0.5 && a < 1.0 && pos.y() > -2) {
                         p.settleFrames++;
                         if (p.settleFrames > 20) {
-                            // 【修正】状態のミューテーション（削除）を先行させる
                             this.settlingPieces.splice(i, 1);
-
-                            // その後、盤面評価とターン進行を評価する
                             this.snapToGrid(p);
                             continue;
                         }
@@ -750,14 +773,12 @@
                         p.settleFrames = 0;
                     }
 
-                    // 落下判定
                     const isDeepFall = pos.y() < -3.0;
                     const isWideOut = pos.y() < -0.5 && (Math.abs(pos.x()) > 4.0 || Math.abs(pos.z()) > 4.0);
 
                     if (isDeepFall || isWideOut) {
                         this.removePiece(p);
                         this.settlingPieces.splice(i, 1);
-                        // その後、盤面評価とターン進行を評価する
                         this.updateGridOwnership();
                         this.checkGameEnd();
                     }
@@ -770,13 +791,8 @@
             }
 
             updateGridOwnership() {
-                this.highlightElements.forEach(h => {
-                    this.scene.remove(h); h.geometry.dispose(); h.material.dispose();
-                });
-                this.highlightElements = [];
                 this.gameState = Array(this.BOARD_SIZE).fill(null).map(() => Array(this.BOARD_SIZE).fill(null));
 
-                // 多数決ロジック
                 const cellPieceCounts = Array(this.BOARD_SIZE).fill(null).map(() =>
                     Array(this.BOARD_SIZE).fill(null).map(() => ({ 'X': 0, 'O': 0 }))
                 );
@@ -808,17 +824,13 @@
                 for (let gz = 0; gz < this.BOARD_SIZE; gz++) {
                     for (let gx = 0; gx < this.BOARD_SIZE; gx++) {
                         const owner = this.gameState[gz][gx];
+                        const highlightMesh = this.gridHighlights[gz][gx];
+
                         if (owner !== null) {
-                            const highlightGeo = new THREE.PlaneGeometry(this.CELL_SIZE * 0.9, this.CELL_SIZE * 0.9);
-                            const highlightMat = new THREE.MeshBasicMaterial({
-                                color: owner === 'X' ? 0xff4444 : 0x4444ff,
-                                transparent: true, opacity: 0.3, side: THREE.DoubleSide
-                            });
-                            const highlightMesh = new THREE.Mesh(highlightGeo, highlightMat);
-                            highlightMesh.rotation.x = -Math.PI / 2;
-                            highlightMesh.position.set((gx - 1) * this.CELL_SIZE, 0.02, (gz - 1) * this.CELL_SIZE);
-                            this.scene.add(highlightMesh);
-                            this.highlightElements.push(highlightMesh);
+                            highlightMesh.material = this.highlightMats[owner];
+                            highlightMesh.visible = true;
+                        } else {
+                            highlightMesh.visible = false;
                         }
                     }
                 }
@@ -839,8 +851,6 @@
                     this.gameOver = true;
                     this.gameStatus.innerHTML = `Player ${win} Wins!<br><span style="font-size:0.5em">🎉 Victory 🎉</span>`;
                     this.gameStatus.style.display = 'block';
-
-                    // 勝利演出のトリガー
                     this.triggerWinPerformance(win);
                 } else if (!this.activePiece && this.settlingPieces.length === 0) {
                     this.nextTurn();
@@ -851,13 +861,11 @@
                 this.isWinningCameraOrbit = true;
                 this.cameraAngle = 0;
 
-                // 1. 紙吹雪パーティクルの生成
                 const geometry = new THREE.PlaneGeometry(0.3, 0.3);
-                const colors = [0xd4af37, 0xc0c0c0, 0xff2222, 0x2244ff, 0xffffff]; // ゴールド、シルバー、チームカラー
+                const colors = [0xd4af37, 0xc0c0c0, 0xff2222, 0x2244ff, 0xffffff];
                 for (let i = 0; i < 150; i++) {
                     const material = new THREE.MeshBasicMaterial({
-                        color: colors[Math.floor(Math.random() * colors.length)],
-                        side: THREE.DoubleSide
+                        color: colors[Math.floor(Math.random() * colors.length)], side: THREE.DoubleSide
                     });
                     const mesh = new THREE.Mesh(geometry, material);
                     mesh.position.set((Math.random() - 0.5) * 15, 10 + Math.random() * 10, (Math.random() - 0.5) * 15);
@@ -867,7 +875,6 @@
                     this.confettiParticles.push(mesh);
                 }
 
-                // 2. 勝利チームの駒を跳ねさせる
                 this.gamePieces.forEach(p => {
                     if (p.player === winner) {
                         const body = p.body;
@@ -878,7 +885,7 @@
                         body.setAngularVelocity(new Ammo.btVector3((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10));
                     }
                 });
-                this.soundManager.playWin(); // 勝利音の追加
+                this.soundManager.playWin();
             }
 
             nextTurn() {
@@ -901,7 +908,6 @@
                 this.updateGridOwnership();
                 this.settlingPieces = []; this.activePiece = null;
 
-                // 演出リソースの破棄とカメラリセット
                 if (this.confettiParticles) {
                     this.confettiParticles.forEach(p => {
                         if (p.geometry) p.geometry.dispose();
@@ -910,7 +916,7 @@
                     });
                 }
                 this.isWinningCameraOrbit = false;
-                this.camera.position.copy(this.CAMERA_BASE_POSITION);
+                this.camera.position.copy(this.currentCameraBasePos);
                 this.camera.lookAt(0, 0, 0);
 
                 this.initializeGameState();
@@ -921,7 +927,6 @@
             }
 
             removePiece(p) {
-                // 1. Three.js リソースの解放
                 this.scene.remove(p.mesh);
                 if (p.mesh.geometry) p.mesh.geometry.dispose();
                 if (p.mesh.material) {
@@ -932,7 +937,6 @@
                     }
                 }
 
-                // 2. Ammo.js リソースの解放
                 this.world.removeRigidBody(p.body);
                 const motionState = p.body.getMotionState();
                 if (motionState) Ammo.destroy(motionState);
@@ -940,14 +944,16 @@
                 if (collisionShape) Ammo.destroy(collisionShape);
                 Ammo.destroy(p.body);
 
-                // 3. 配列からの除外
                 const i = this.gamePieces.indexOf(p);
                 if (i > -1) this.gamePieces.splice(i, 1);
             }
 
             animate() {
                 requestAnimationFrame(this.animate.bind(this));
-                const dt = this.clock.getDelta();
+
+                // 時間刻みのクランプにより物理エンジンの破綻を防止
+                const dt = Math.min(this.clock.getDelta(), 0.1);
+
                 this.processHandInput();
                 this.world.stepSimulation(dt, 10);
 
@@ -961,11 +967,10 @@
                         p.mesh.position.set(pos.x(), pos.y(), pos.z());
                         p.mesh.quaternion.set(quat.x(), quat.y(), quat.z(), quat.w());
 
-                        // --- 衝突検知とHit音の再生 ---
                         const v = p.body.getLinearVelocity();
                         const currentVel = new THREE.Vector3(v.x(), v.y(), v.z());
                         if (p.lastVel) {
-                            const deltaV = currentVel.distanceTo(p.lastVel);// 速度変化が閾値(2.0)を超え、かつ操作中の駒でない場合に衝突と判定
+                            const deltaV = currentVel.distanceTo(p.lastVel);
                             if (deltaV > 2.0 && p !== this.activePiece) {
                                 this.soundManager.playHit(deltaV);
                             }
@@ -974,10 +979,9 @@
                     }
                 }
 
-                // 演出のアニメーション更新
                 if (this.isWinningCameraOrbit) {
                     this.cameraAngle += dt * 0.5;
-                    const radius = Math.sqrt(Math.pow(this.CAMERA_BASE_POSITION.x, 2) + Math.pow(this.CAMERA_BASE_POSITION.z, 2));
+                    const radius = Math.sqrt(Math.pow(this.currentCameraBasePos.x, 2) + Math.pow(this.currentCameraBasePos.z, 2));
                     this.camera.position.x = radius * Math.sin(this.cameraAngle);
                     this.camera.position.z = radius * Math.cos(this.cameraAngle);
                     this.camera.lookAt(0, 0, 0);
@@ -989,7 +993,7 @@
                         p.rotation.x += p.rotationSpeed.x;
                         p.rotation.y += p.rotationSpeed.y;
                         p.rotation.z += p.rotationSpeed.z;
-                        if (p.position.y < -5) { p.position.y = 15; } // 再循環
+                        if (p.position.y < -5) { p.position.y = 15; }
                     });
                 }
 
@@ -1002,7 +1006,6 @@
             if (typeof Ammo === 'function') {
                 Ammo().then(function (AmmoLib) {
                     window.Ammo = AmmoLib;
-                    // Wait for fonts to be ready
                     document.fonts.ready.then(() => {
                         document.getElementById('loadingMsg').style.display = 'none';
                         new PhysicsTicTacToe();
